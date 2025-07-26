@@ -1,0 +1,22 @@
+# Python
+*.pyc
+__pycache__/
+database.db
+report.pdf
+.env
+
+# Node
+node_modules/
+dist/
+.env.local
+
+# VS Code
+.vscode/
+
+# Logs and temporary files
+*.log
+*.DS_Store
+*.sqlite3
+
+# OS
+Thumbs.db
