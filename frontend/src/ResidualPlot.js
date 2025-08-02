@@ -21,7 +21,7 @@ function ResidualPlot({ y, y_pred }) {
         height: 400,
         title: "Residual Plot",
         xaxis: { title: "Predicted" },
-        yaxis: { title: "Residuals (y - ŷ)" },
+        yaxis: { title: "Residuals (y - ŷ)" },
       }}
     />
   );

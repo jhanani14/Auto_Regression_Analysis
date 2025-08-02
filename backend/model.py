@@ -1,81 +1,60 @@
 import pandas as pd
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from sklearn.metrics import r2_score
-import sqlite3, datetime
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
 
-DB_PATH = 'database.db'
+def run_regression_models(df, model_type="linear"):
+    df = df.dropna()
+    y = df.iloc[:, -1]
+    X = df.iloc[:, :-1]
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS regression_results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            model_type TEXT,
-            coef TEXT,
-            intercept REAL,
-            r2 REAL,
-            created_at TEXT,
-            dataset_name TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def save_results(model_type, coef, intercept, r2, dataset_name):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO regression_results (model_type, coef, intercept, r2, created_at, dataset_name)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (model_type, str(coef), intercept, r2, datetime.datetime.now().isoformat(), dataset_name))
-    conn.commit()
-    conn.close()
-
-def run_regression(df, x_cols, y_col, model_type="linear", dataset_name="uploaded_data"):
-    df = df[x_cols + [y_col]].dropna()
-    X = df[x_cols].values
-    y = df[y_col].values
-
-    if model_type == "ridge":
+    if model_type == "linear":
+        model = LinearRegression()
+    elif model_type == "ridge":
         model = Ridge(alpha=1.0)
     elif model_type == "lasso":
         model = Lasso(alpha=0.1)
     else:
-        model = LinearRegression()
+        raise ValueError("Invalid model type")
 
     model.fit(X, y)
     y_pred = model.predict(X)
     r2 = r2_score(y, y_pred)
 
-    coef = dict(zip(x_cols, model.coef_))
-    intercept = model.intercept_
+    # Regression Plot
+    fig1, ax1 = plt.subplots()
+    ax1.scatter(y, y_pred, color="blue")
+    ax1.plot(y, y, color="red", linestyle="--")
+    ax1.set_xlabel("Actual")
+    ax1.set_ylabel("Predicted")
+    ax1.set_title("Regression Plot")
+    buf1 = BytesIO()
+    fig1.savefig(buf1, format="png")
+    buf1.seek(0)
 
-    save_results(model_type, coef, intercept, r2, dataset_name)
+    # Residual Plot
+    residuals = y - y_pred
+    fig2, ax2 = plt.subplots()
+    ax2.scatter(y_pred, residuals, color="purple")
+    ax2.axhline(y=0, color="red", linestyle="--")
+    ax2.set_xlabel("Predicted")
+    ax2.set_ylabel("Residuals")
+    ax2.set_title("Residual Plot")
+    buf2 = BytesIO()
+    fig2.savefig(buf2, format="png")
+    buf2.seek(0)
 
-    return coef, intercept, r2, x_cols, y_col, y.tolist(), y_pred.tolist()
-
-def compare_models(df, x_cols, y_col):
-    df = df[x_cols + [y_col]].dropna()
-    X = df[x_cols].values
-    y = df[y_col].values
-
-    models = {
-        "linear": LinearRegression(),
-        "ridge": Ridge(alpha=1.0),
-        "lasso": Lasso(alpha=0.1)
+    results = {
+        "model_type": model_type,
+        "x_columns": list(X.columns),
+        "y_column": y.name,
+        "intercept": model.intercept_,
+        "r2": r2,
+        "coef": dict(zip(X.columns, model.coef_)),
+        "y_values": list(y),
+        "y_pred": list(y_pred),
     }
 
-    results = {}
-
-    for name, model in models.items():
-        model.fit(X, y)
-        y_pred = model.predict(X)
-        r2 = r2_score(y, y_pred)
-        results[name] = {
-            "coef": dict(zip(x_cols, model.coef_)),
-            "intercept": model.intercept_,
-            "r2": r2,
-        }
-
-    return results
+    return results, buf2, buf1

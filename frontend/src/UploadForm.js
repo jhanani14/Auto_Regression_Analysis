@@ -9,6 +9,7 @@ function UploadForm() {
   const [datasetUrl, setDatasetUrl] = useState("");
   const [modelType, setModelType] = useState("linear");
   const [result, setResult] = useState(null);
+  const [datasetId, setDatasetId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -21,21 +22,28 @@ function UploadForm() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    const formData = new FormData();
-    if (file) formData.append("file", file);
-    if (datasetUrl) formData.append("dataset_url", datasetUrl);
-    formData.append("model_type", modelType);
-
     setLoading(true);
     setError(null);
     setResult(null);
 
     try {
-      const res = await axios.post("http://localhost:5000/api/upload", formData);
-      setResult(res.data);
+      const formData = new FormData();
+      if (file) formData.append("file", file);
+      if (datasetUrl) formData.append("url", datasetUrl);
+      formData.append("name", "Uploaded Dataset");
+
+      const uploadRes = await axios.post("http://localhost:5000/upload", formData);
+      const id = uploadRes.data.dataset_id;
+      setDatasetId(id);
+
+      const regressRes = await axios.post("http://localhost:5000/regress", {
+        dataset_id: id,
+        model_type: modelType,
+      });
+
+      setResult(regressRes.data);
     } catch (err) {
-      const msg = err.response?.data?.error || "Upload failed.";
+      const msg = err.response?.data?.error || "Upload or regression failed.";
       setError(msg);
     } finally {
       setLoading(false);
@@ -43,18 +51,24 @@ function UploadForm() {
   };
 
   const downloadPDF = async () => {
-    const res = await axios.get("http://localhost:5000/api/report", { responseType: "blob" });
-    const url = window.URL.createObjectURL(new Blob([res.data]));
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", "regression_report.pdf");
-    document.body.appendChild(link);
-    link.click();
+    try {
+      const res = await axios.get(`http://localhost:5000/report/${datasetId}`, {
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "regression_report.pdf");
+      document.body.appendChild(link);
+      link.click();
+    } catch {
+      alert("Failed to download PDF.");
+    }
   };
 
   return (
     <div>
-      <h2>Upload CSV or Dataset URL</h2>
+      <h2>📂 Upload CSV or Dataset URL</h2>
       <form onSubmit={handleSubmit}>
         <label><strong>Model Type:</strong></label>
         <select value={modelType} onChange={(e) => setModelType(e.target.value)}>
@@ -82,36 +96,42 @@ function UploadForm() {
       <br />
       {error && <p style={{ color: "red" }}>{error}</p>}
 
-      {result && (
+      {result ? (
         <div>
-          <h3>Results</h3>
+          <h3>📈 Results</h3>
           <p><strong>Model:</strong> {result.model_type}</p>
-          <p><strong>Y Column:</strong> {result.y_column}</p>
-          <p><strong>X Column(s):</strong> {Array.isArray(result.x_columns) ? result.x_columns.join(", ") : result.x_columns}</p>
-          <p><strong>Intercept:</strong> {result.intercept.toFixed(3)}</p>
-          <p><strong>R² Score:</strong> {result.r2.toFixed(3)}</p>
+          <p><strong>Y Column:</strong> {result.y_column || "N/A"}</p>
+          <p><strong>X Columns:</strong> {Array.isArray(result.x_columns) ? result.x_columns.join(", ") : "N/A"}</p>
+          <p><strong>Intercept:</strong> {result.intercept !== undefined ? result.intercept.toFixed(3) : "N/A"}</p>
+          <p><strong>R² Score:</strong> {result.r2 !== undefined ? result.r2.toFixed(3) : "N/A"}</p>
 
           <p><strong>Coefficients:</strong></p>
           <ul>
-            {Object.entries(result.coef).map(([key, val]) => (
-              <li key={key}>{key}: {val.toFixed(3)}</li>
-            ))}
+            {result.coef ? (
+              Object.entries(result.coef).map(([key, val]) => (
+                <li key={key}>{key}: {val !== undefined ? val.toFixed(3) : "N/A"}</li>
+              ))
+            ) : (
+              <li>No coefficients found</li>
+            )}
           </ul>
 
           <button onClick={downloadPDF}>📥 Download PDF Report</button>
 
           <RegressionPlot
             data={{
-              x_values: result.y_values,
-              y_values: result.y_pred,
-              y_pred: result.y_values,
+              x_values: result.y_values || [],
+              y_values: result.y_pred || [],
               x_column: "Actual Y",
-              y_column: "Predicted Y"
+              y_column: "Predicted Y",
+              model_type: result.model_type
             }}
           />
 
-          <ResidualPlot y={result.y_values} y_pred={result.y_pred} />
+          <ResidualPlot y={result.y_values || []} y_pred={result.y_pred || []} />
         </div>
+      ) : (
+        !loading && <p>No results yet. Please upload and run.</p>
       )}
 
       <ModelExplanation />

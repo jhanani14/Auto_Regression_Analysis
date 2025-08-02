@@ -1,76 +1,92 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import pandas as pd
-import requests
-from io import StringIO
-from model import run_regression, init_db
-from report_generator import generate_pdf
+from model import run_regression_models
+from report_generator import generate_pdf_report
+from db_config import get_connection
 
+import pandas as pd
+import json
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# Initialize database
-init_db()
-
-@app.route('/api/upload', methods=['POST'])
+@app.route("/upload", methods=["POST"])
 def upload():
-    model_type = request.form.get('model_type', 'linear').lower()
-    url = request.form.get('dataset_url')
+    try:
+        file = request.files.get("file")
+        url = request.form.get("url")
+        name = request.form.get("name") or "Unnamed Dataset"
 
-    df = None
-    filename = "uploaded_data.csv"
-
-    # Get file or URL
-    if 'file' in request.files:
-        file = request.files['file']
-        filename = file.filename
-        if filename.endswith('.csv'):
+        # Read the CSV
+        if file:
             df = pd.read_csv(file)
+        elif url:
+            df = pd.read_csv(url)
         else:
-            return jsonify({"error": "Only CSV files are supported"}), 400
-    elif url:
-        try:
-            response = requests.get(url)
-            df = pd.read_csv(StringIO(response.text))
-            filename = url.split("/")[-1]
-        except:
-            return jsonify({"error": "Failed to load URL"}), 400
-    else:
-        return jsonify({"error": "No dataset provided"}), 400
+            return jsonify({"error": "No file or URL provided"}), 400
 
-    # ✅ Auto-select numeric columns
-    numeric_cols = df.select_dtypes(include='number').columns.tolist()
-    if len(numeric_cols) < 2:
-        return jsonify({"error": "Need at least 2 numeric columns"}), 400
+        # Convert DataFrame to JSON string before saving
+        json_str = json.dumps(df.to_dict(orient="records"))
 
-    x_cols = numeric_cols[:-1]  # All but last
-    y_col = numeric_cols[-1]   # Last column
-
-    try:
-        coef, intercept, r2, x_cols, y_col, y_vals, y_pred = run_regression(
-            df, x_cols, y_col, model_type, filename
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO datasets (name, data) VALUES (%s, %s) RETURNING id",
+            (name, json_str)
         )
-        generate_pdf(coef, intercept, r2, model_type)  # PDF saved
+        dataset_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
 
-        return jsonify({
-            "coef": coef,
-            "intercept": intercept,
-            "r2": r2,
-            "x_columns": x_cols,
-            "y_column": y_col,
-            "y_values": y_vals,
-            "y_pred": y_pred,
-            "model_type": model_type
-        })
+        return jsonify({"message": "Uploaded", "dataset_id": dataset_id})
     except Exception as e:
-        return jsonify({"error": f"Regression failed: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/report', methods=['GET'])
-def download_report():
+@app.route("/regress", methods=["POST"])
+def regress():
     try:
-        return send_file("report.pdf", as_attachment=True)
+        dataset_id = request.json.get("dataset_id")
+        model_type = request.json.get("model_type", "linear")
+
+        # Fetch JSON from DB
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT data FROM datasets WHERE id = %s", (dataset_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row:
+            return jsonify({"error": "Dataset not found"}), 404
+
+        data = row[0]
+
+        # Safely convert JSON string to DataFrame
+        if isinstance(data, list):
+            df = pd.DataFrame(data)
+        else:
+            df = pd.DataFrame(json.loads(data))
+
+        results, residual_plot, reg_plot = run_regression_models(df, model_type)
+
+        pdf_filename = f"report_{dataset_id}.pdf"
+        generate_pdf_report(results, reg_plot, residual_plot, pdf_filename)
+
+        return jsonify(results)
     except Exception as e:
-        return jsonify({"error": f"Download failed: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/report/<int:dataset_id>", methods=["GET"])
+def download_report(dataset_id):
+    pdf_path = f"report_{dataset_id}.pdf"
+    if os.path.exists(pdf_path):
+        return send_file(pdf_path, as_attachment=True)
+    else:
+        return jsonify({"error": "Report not found"}), 404
 
 if __name__ == "__main__":
     app.run(debug=True)
